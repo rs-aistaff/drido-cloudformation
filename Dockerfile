@@ -1,5 +1,5 @@
 # Use the official Nginx image from Docker Hub
-FROM 530558030853.dkr.ecr.us-east-1.amazonaws.com/nginx:latest
+FROM public.ecr.aws/nginx/nginx:latest
 
 # Copy custom nginx config if needed
 # COPY nginx.conf /etc/nginx/nginx.conf

@@ -35,14 +35,20 @@ phases:
       - export AWS_ACCESS_KEY_ID=$(echo $TEMP_ROLE | jq -r .Credentials.AccessKeyId)
       - export AWS_SECRET_ACCESS_KEY=$(echo $TEMP_ROLE | jq -r .Credentials.SecretAccessKey)
       - export AWS_SESSION_TOKEN=$(echo $TEMP_ROLE | jq -r .Credentials.SessionToken)
+      - echo "Switched to target account credentials"
       
-      # Deploy ECS infrastructure if needed
-      - echo "Deploying ECS infrastructure..."
-      - aws cloudformation deploy --template-file infrastructure/ecs-infra.yaml --stack-name pm-clear-report-ecs-dev --parameter-overrides Environment=dev ECRAccountId=649818221453 --capabilities CAPABILITY_NAMED_IAM --role-arn arn:aws:iam::029487232994:role/ECSDeployRole-dev --region ap-south-1 || true
+      # Deploy ECS infrastructure in target account
+      - echo "Deploying ECS infrastructure in target account..."
+      - aws cloudformation deploy --template-file infrastructure/ecs-infra.yaml --stack-name pm-clear-report-ecs-dev --parameter-overrides Environment=dev ECRAccountId=649818221453 VpcId=vpc-0600966aa896ad5e3 PublicSubnet1=subnet-02d0927d3fb36cbfc PublicSubnet2=subnet-0afb78be8cc8233b9 PrivateSubnet1=subnet-0abe1be487148d403 PrivateSubnet2=subnet-0e15b3e4bd967909d --capabilities CAPABILITY_NAMED_IAM --region ap-south-1
       
-      # Update ECS service
-      - echo "Updating ECS service..."
-      - aws ecs update-service --cluster pm-clear-report-chatbot-al-dev --service pm-clear-report-chatbot-al-service-dev --force-new-deployment --region ap-south-1
+      # Update ECS service if it exists
+      - echo "Checking if ECS service exists in target account..."
+      - if aws ecs describe-services --cluster pm-clear-report-chatbot-al-dev --services pm-clear-report-chatbot-al-service-dev --region ap-south-1 >/dev/null 2>&1; then
+          echo "Updating ECS service in target account...";
+          aws ecs update-service --cluster pm-clear-report-chatbot-al-dev --service pm-clear-report-chatbot-al-service-dev --force-new-deployment --region ap-south-1;
+        else
+          echo "ECS service not found in target account, will be created by CloudFormation";
+        fi
 
 artifacts:
   files:

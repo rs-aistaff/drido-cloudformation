@@ -28,6 +28,21 @@ phases:
       - echo '[{"name":"clear-report-chatbot-al","imageUri":"'$REPOSITORY_URI:$IMAGE_TAG'"}]' > imagedefinitions.json
       # Force KMS encryption
       - aws s3 cp imagedefinitions.json s3://$ARTIFACT_BUCKET_NAME/imagedefinitions.json --sse aws:kms --sse-kms-key-id $KMS_KEY_ID || true
+      
+      # Deploy to Dev Environment
+      - echo "Assuming cross-account role for dev deployment..."
+      - TEMP_ROLE=$(aws sts assume-role --role-arn arn:aws:iam::029487232994:role/ECSDeployRole-dev --role-session-name CodeBuildSession)
+      - export AWS_ACCESS_KEY_ID=$(echo $TEMP_ROLE | jq -r .Credentials.AccessKeyId)
+      - export AWS_SECRET_ACCESS_KEY=$(echo $TEMP_ROLE | jq -r .Credentials.SecretAccessKey)
+      - export AWS_SESSION_TOKEN=$(echo $TEMP_ROLE | jq -r .Credentials.SessionToken)
+      
+      # Deploy ECS infrastructure if needed
+      - echo "Deploying ECS infrastructure..."
+      - aws cloudformation deploy --template-file infrastructure/ecs-infra.yaml --stack-name pm-clear-report-ecs-dev --parameter-overrides Environment=dev ECRAccountId=649818221453 --capabilities CAPABILITY_NAMED_IAM --role-arn arn:aws:iam::029487232994:role/ECSDeployRole-dev --region ap-south-1 || true
+      
+      # Update ECS service
+      - echo "Updating ECS service..."
+      - aws ecs update-service --cluster pm-clear-report-chatbot-al-dev --service pm-clear-report-chatbot-al-service-dev --force-new-deployment --region ap-south-1
 
 artifacts:
   files:

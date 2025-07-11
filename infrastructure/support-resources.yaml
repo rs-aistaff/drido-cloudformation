@@ -1,0 +1,53 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Support resources for Clear Report Chatbot
+
+Parameters:
+  Environment:
+    Type: String
+    Description: Environment name (dev, stg, prod)
+    AllowedValues:
+      - dev
+      - stg
+      - prod
+
+  TableName:
+    Type: String
+    Description: DynamoDB table export name
+
+Resources:
+  # DynamoDB Table for application data
+  DynamoDBTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "clear-dynamodb-table-${Environment}"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+
+  # S3 Bucket for application storage
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "clear-s3-bucket-${Environment}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+Outputs:
+  ClearDynamoDBTableName:
+    Description: DynamoDB table name
+    Value: !Ref DynamoDBTable
+    Export:
+      Name: !Ref TableName
+  
+  ClearS3BucketName:
+    Description: S3 bucket name
+    Value: !Ref S3Bucket
+    Export:
+      Name: !Sub "ClearS3BucketName-${Environment}"

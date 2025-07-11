@@ -1,0 +1,357 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: ECS Fargate Service for Clear Report Chatbot (Target Account, Multi-Env)
+
+Parameters:
+  Environment:
+    Type: String
+    Description: Environment name (dev, stg, prod)
+    AllowedValues:
+      - dev
+      # - stg
+      # - prod
+
+  # VPC and Subnets - values resolved from mappings in Resources
+  VpcId:
+    Type: String
+    Description: VPC ID for the environment
+#    Default: !FindInMap [VpcMap, !Ref Environment, VpcId]
+
+  PublicSubnet1:
+    Type: String
+    Description: Public Subnet 1 for the environment
+#    Default: !FindInMap [SubnetMap, !Ref Environment, PublicSubnet1]
+
+  PublicSubnet2:
+    Type: String
+    Description: Public Subnet 2 for the environment
+#    Default: !FindInMap [SubnetMap, !Ref Environment, PublicSubnet2]
+
+  PrivateSubnet1:
+    Type: String
+    Description: Private Subnet 1 for the environment
+#    Default: !FindInMap [SubnetMap, !Ref Environment, PrivateSubnet1]
+
+  PrivateSubnet2:
+    Type: String
+    Description: Private Subnet 2 for the environment
+#    Default: !FindInMap [SubnetMap, !Ref Environment, PrivateSubnet2]
+
+  ECRAccountId:
+    Type: String
+    Description: ECR Account ID
+    Default: "530558030853"
+
+  # CertificateArn:
+  #   Type: String
+  #   Description: ACM Certificate ARN for HTTPS Listener
+  #   Default: !FindInMap [CertMap, !Ref Environment, CertificateArn]
+
+Mappings:
+  VpcMap:
+    dev:
+      VpcId: vpc-0600966aa896ad5e3
+#     # stg:
+#     #   VpcId: vpc-0a111111111111111
+#     # prod:
+#     #   VpcId: vpc-0b222222222222222
+
+  SubnetMap:
+    dev:
+      PublicSubnet1: subnet-02d0927d3fb36cbfc
+      PublicSubnet2: subnet-0afb78be8cc8233b9
+      PrivateSubnet1: subnet-0abe1be487148d403
+      PrivateSubnet2: subnet-0e15b3e4bd967909d
+    # stg:
+    #   PublicSubnet1: subnet-0d111111111111111
+    #   PublicSubnet2: subnet-0d222222222222222
+    #   PrivateSubnet1: subnet-0d333333333333333
+    #   PrivateSubnet2: subnet-0d444444444444444
+    # prod:
+    #   PublicSubnet1: subnet-0e111111111111111
+    #   PublicSubnet2: subnet-0e222222222222222
+    #   PrivateSubnet1: subnet-0e333333333333333
+    #   PrivateSubnet2: subnet-0e444444444444444
+
+  # CertMap:
+  #   dev:
+  #     CertificateArn: arn:aws:acm:us-east-1:127023561800:certificate/dev-cert-arn
+  #   stg:
+  #     CertificateArn: arn:aws:acm:us-east-1:236730738361:certificate/stg-cert-arn
+  #   prod:
+  #     CertificateArn: arn:aws:acm:us-east-1:438777377152:certificate/prod-cert-arn
+
+# ... (rest of your Resources section remains unchanged) ...
+
+Resources:
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "Allow HTTP/HTTPS traffic to ALB (${Environment})"
+      VpcId: !FindInMap [VpcMap, !Ref Environment, VpcId]
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 8443
+          ToPort: 8443
+          CidrIp: 0.0.0.0/0
+
+  ECSServiceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "Allow traffic from ALB to ECS tasks (${Environment})"
+      VpcId: !FindInMap [VpcMap, !Ref Environment, VpcId]
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !GetAtt ALBSecurityGroup.GroupId
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub "pm-clear-report-chatbot-al-${Environment}"
+
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "ECSTaskExecutionRole-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+
+  ECSTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "ECSTaskRole-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "AppAccess-${Environment}"
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: s3:*
+                Resource: "*"
+              - Effect: Allow
+                Action: bedrock:InvokeModel
+                Resource: arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-v2
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                  - dynamodb:Query
+                  - dynamodb:UpdateItem
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - route53:ChangeResourceRecordSets
+                  - route53:GetChange
+                  - route53:ListResourceRecordSets
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ssm:DescribeSessions
+                  - ssm:GetConnectionStatus
+                  - ssm:StartSession
+                  - ssm:TerminateSession
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                  - logs:GetLogEvents
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+
+  ECSTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "pm-clear-report-chatbot-al-task-${Environment}"
+      Cpu: '256'
+      Memory: '512'
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt ECSTaskRole.Arn
+      ContainerDefinitions:
+        - Name: !Sub "pm-clear-report-chatbot-al-${Environment}"
+          Image: !Sub "${ECRAccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/pm-clear-report-chatbot:latest"
+          PortMappings:
+            - ContainerPort: 80
+          Essential: true
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Sub "/ecs/pm-clear-report-chatbot-al-${Environment}"
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+          Environment:
+            - Name: DYNAMODB_TABLE_NAME
+              Value: !Sub "ClearDynamoDBTableName-${Environment}"
+            - Name: S3_BUCKET_NAME
+              Value: !Sub "ClearS3BucketName-${Environment}"
+
+  ECSService:
+    Type: AWS::ECS::Service
+    DependsOn: 
+      - LoadBalancerListenerHTTP
+      # - LoadBalancerListenerHTTPS 
+    Properties:
+      ServiceName: !Sub "pm-clear-report-chatbot-al-service-${Environment}"
+      Cluster: !Ref ECSCluster
+      DesiredCount: 3
+      EnableExecuteCommand: true
+      LaunchType: FARGATE
+      TaskDefinition: !Ref ECSTaskDefinition
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          SecurityGroups: [!Ref ECSServiceSecurityGroup]
+          Subnets: [!FindInMap [SubnetMap, !Ref Environment, PrivateSubnet1], !FindInMap [SubnetMap, !Ref Environment, PrivateSubnet2]]
+      LoadBalancers:
+        - ContainerName: !Sub "pm-clear-report-chatbot-al-${Environment}"
+          ContainerPort: 80
+          TargetGroupArn: !Ref TargetGroup
+      HealthCheckGracePeriodSeconds: 60
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "pm-clear-report-alb-${Environment}"
+      Subnets: [!FindInMap [SubnetMap, !Ref Environment, PublicSubnet1], !FindInMap [SubnetMap, !Ref Environment, PublicSubnet2]]
+      SecurityGroups: [!Ref ALBSecurityGroup]
+      Scheme: internet-facing
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !FindInMap [VpcMap, !Ref Environment, VpcId]
+      Port: 80
+      Protocol: HTTP
+      TargetType: ip
+      HealthCheckPath: /
+
+  LoadBalancerListenerHTTP:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  # LoadBalancerListenerHTTPS:
+  #   Type: AWS::ElasticLoadBalancingV2::Listener
+  #   Properties:
+  #     LoadBalancerArn: !Ref LoadBalancer
+  #     Port: 8443
+  #     Protocol: HTTPS
+  #     Certificates:
+  #       - CertificateArn: arn:aws:acm:us-east-1:127023561800:certificate/d74b8350-5f9f-4871-96aa-f1eda3da6f59 # Replace as needed
+  #     DefaultActions:
+  #       - Type: forward
+  #         TargetGroupArn: !Ref TargetGroup
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/ecs/pm-clear-report-chatbot-al-${Environment}"
+      RetentionInDays: 7
+
+  # ECSDeployRole is created by cross-account-role.yaml template to avoid duplication
+  # ECSDeployRole:
+  #   Type: AWS::IAM::Role
+  #   Properties:
+  #     RoleName: !Sub "ECSDeployRole-${Environment}"
+  #     AssumeRolePolicyDocument:
+  #       Version: '2012-10-17'
+  #       Statement:
+  #         - Effect: Allow
+  #           Principal:
+  #             AWS: 
+  #               - arn:aws:iam::530558030853:root
+  #           Action: sts:AssumeRole
+  #     Policies:
+  #       - PolicyName: !Sub "ECSDeployPolicy-${Environment}"
+  #         PolicyDocument:
+  #           Version: '2012-10-17'
+  #           Statement:
+  #             - Effect: Allow
+  #               Action: ecs:*
+  #               Resource: "*"
+  #             - Effect: Allow
+  #               Action: iam:PassRole
+  #               Resource:
+  #                 - !GetAtt ECSTaskExecutionRole.Arn
+  #                 - !GetAtt ECSTaskRole.Arn
+  #             - Effect: Allow
+  #               Action:
+  #                 - ecr:GetAuthorizationToken
+  #                 - ecr:BatchCheckLayerAvailability
+  #                 - ecr:GetDownloadUrlForLayer
+  #                 - ecr:BatchGetImage
+  #                 - ecr:*
+  #               Resource: "*"
+  #             - Effect: Allow
+  #               Action:
+  #                 - s3:GetObject
+  #                 - s3:PutObject
+  #                 - s3:ListBucket
+  #                 - s3:GetBucketLocation
+  #                 - s3:GetObjectVersion
+  #               Resource: "*"
+  #             - Effect: Allow
+  #               Action: logs:*
+  #               Resource: "*"
+  #             - Effect: Allow
+  #               Action:
+  #                 - kms:Decrypt
+  #                 - kms:DescribeKey
+  #               Resource: "*"
+  #             - Effect: Allow
+  #               Action:
+  #                 - cloudformation:CreateStack
+  #                 - cloudformation:UpdateStack
+  #                 - cloudformation:DescribeStacks
+  #                 - cloudformation:DescribeStackEvents
+  #                 - cloudformation:GetTemplate
+  #                 - cloudformation:ValidateTemplate
+  #                 - cloudformation:CreateChangeSet
+  #                 - cloudformation:ExecuteChangeSet
+  #                 - cloudformation:DeleteStack
+  #               Resource: "*"
+  #             - Effect: Allow
+  #               Action: dynamodb:*
+  #               Resource: "*"
+  #             - Effect: Allow
+  #               Action: route53:*
+  #               Resource: "*"
+
+Outputs:
+  LoadBalancerDNS:
+    Description: "Application Load Balancer DNS"
+    Value: !GetAtt LoadBalancer.DNSName
+  ECSClusterName:
+    Value: !Ref ECSCluster
+    Description: Name of the ECS Cluster
+  ECSServiceName:
+    Value: !Ref ECSService
+    Description: Name of the ECS Service
